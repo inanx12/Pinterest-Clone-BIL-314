@@ -8,7 +8,7 @@
 | Kişi | Rol | Klasör |
 |------|-----|--------|
 | **İnan** | 🖥️ SERVER (backend) | `server/` |
-| **İsmail Arslan** | 🎨 CLIENT (frontend) | `client/` |
+| **İsmail** | 🎨 CLIENT (frontend) | `client/` |
 
 **Ortak alan:** `docs/`, `common/` (PR ile değiştirilir, önce konuşulur)
 
@@ -33,7 +33,7 @@
 
 ### Gün 3 (1 Mayıs) — Yardımcı Modüller + Network Katmanı
 
-| 🖥️ SERVER (İnan) | 🎨 CLIENT (Arkadaş) |
+| 🖥️ SERVER (İnan) | 🎨 CLIENT (İsmail) |
 |---|---|
 | ☐ `util.cpp` — sha256_hex, random_hex, uuid_hex, now_unix | ☐ Qt6 Widgets temel öğrenme (3-4 saat tutorial) |
 | ☐ `db.cpp` — SQLite wrapper, schema init, PRAGMA'lar | ☐ Qt Designer ile basit form denemesi |
