@@ -1,0 +1,6 @@
+
+# Test artifacts
+test_pcclone.db
+test_pcclone.db-shm
+test_pcclone.db-wal
+build/
