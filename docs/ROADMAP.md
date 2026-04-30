@@ -8,7 +8,7 @@
 | Kişi | Rol | Klasör |
 |------|-----|--------|
 | **İnan** | 🖥️ SERVER (backend) | `server/` |
-| **[Arkadaş]** | 🎨 CLIENT (frontend) | `client/` |
+| **İsmail Arslan** | 🎨 CLIENT (frontend) | `client/` |
 
 **Ortak alan:** `docs/`, `common/` (PR ile değiştirilir, önce konuşulur)
 
@@ -46,7 +46,7 @@
 
 ### Gün 4 (2 Mayıs) — Auth (REGISTER + LOGIN)
 
-| 🖥️ SERVER (İnan) | 🎨 CLIENT (Arkadaş) |
+| 🖥️ SERVER (İnan) | 🎨 CLIENT (İsmail) |
 |---|---|
 | ☐ `auth.cpp` — register_user (validation + INSERT) | ☐ `loginwindow.ui` — Designer ile form |
 | ☐ `auth.cpp` — login_user (hash kontrol + token üret) | ☐ `loginwindow.cpp` — sinyal-slot, network bağlantısı |
@@ -60,7 +60,7 @@
 
 ### Gün 5 (3 Mayıs) — ⭐ İLK ENTEGRASYON ⭐
 
-| 🖥️ SERVER (İnan) | 🎨 CLIENT (Arkadaş) |
+| 🖥️ SERVER (İnan) | 🎨 CLIENT (Aİsmail) |
 |---|---|
 | ☐ `media.cpp` — UPLOAD handler (chunked recv) | ☐ İnan'ın server'ına gerçek REGISTER/LOGIN |
 | ☐ Boyut/format/MIME kontrolü | ☐ Token'ın kalıcı saklanması test |
@@ -73,7 +73,7 @@
 
 ### Gün 6 (4 Mayıs) — Feed + LIST
 
-| 🖥️ SERVER (İnan) | 🎨 CLIENT (Arkadaş) |
+| 🖥️ SERVER (İnan) | 🎨 CLIENT (Aİsmail) |
 |---|---|
 | ☐ `media.cpp` — LIST handler (sort: newest/most_liked/most_downloaded) | ☐ `feedwidget.cpp` — QListView + StandardItemModel |
 | ☐ JSON output (elle string concat veya nlohmann/json) | ☐ Custom delegate (resim + owner + like sayısı) |
@@ -87,7 +87,7 @@
 
 ### Gün 7 (5 Mayıs) — DOWNLOAD/PREVIEW + Upload UI
 
-| 🖥️ SERVER (İnan) | 🎨 CLIENT (Arkadaş) |
+| 🖥️ SERVER (İnan) | 🎨 CLIENT (Aİsmail) |
 |---|---|
 | ☐ `media.cpp` — DOWNLOAD (chunked send) | ☐ `uploaddialog.cpp` — file picker, visibility seçimi |
 | ☐ `media.cpp` — PREVIEW (resim için thumbnail) | ☐ Chunked upload + progress bar |
@@ -101,7 +101,7 @@
 
 ### Gün 8 (6 Mayıs) — LIKE + Profile + Polish
 
-| 🖥️ SERVER (İnan) | 🎨 CLIENT (Arkadaş) |
+| 🖥️ SERVER (İnan) | 🎨 CLIENT (Aİsmail) |
 |---|---|
 | ☐ `media.cpp` — LIKE/UNLIKE (atomic update) | ☐ Like ikonu + count (delegate) |
 | ☐ `media.cpp` — DELETE | ☐ Silme butonu (kendi medyaları) |
@@ -115,7 +115,7 @@
 
 ### Gün 9 (7 Mayıs) — Entegrasyon + Wireshark
 
-| 🖥️ SERVER (İnan) | 🎨 CLIENT (Arkadaş) |
+| 🖥️ SERVER (İnan) | 🎨 CLIENT (Aİsmail) |
 |---|---|
 | ☐ Edge case'ler (yarım upload, geçersiz token, vs.) | ☐ Edge case'ler (server kapalı, timeout, vs.) |
 | ☐ Server log'u → docs/server-log.txt | ☐ Loading spinner, hata mesajları |
@@ -133,7 +133,7 @@
 
 **Doküman dağılımı (8 sayfa):**
 
-| 🖥️ İnan yazar | 🎨 Arkadaş yazar |
+| 🖥️ İnan yazar | 🎨 Aİsmail yazar |
 |---|---|
 | Sistem mimarisi + diyagram | Kullanılan metodoloji + Qt seçimi |
 | Server tarafı detayları (threading, DB, SQLite) | Client tarafı detayları (Qt Widgets, sinyal-slot) |
@@ -144,7 +144,7 @@
 **Sunum dağılımı (10 slayt):**
 - 1-2: Beraber (kapak, problem, mimari)
 - 3-5: İnan (server, protokol, DB)
-- 6-8: Arkadaş (client, UI, demo)
+- 6-8: İsmail (client, UI, demo)
 - 9-10: Beraber (zorluklar, sorular)
 
 **Diyagramlar:** [draw.io](https://app.diagrams.net) ile mimari diyagramı çiz.
