@@ -42,6 +42,6 @@ Bkz. [docs/schema.sql](docs/schema.sql)
 ## Geliştiriciler
 
 - İnan Esen  — 220206016
-- İsmail Arslan — yazılacak...
+- İsmail Arslan — 220206408
 
 BİL314 Bilgisayar Ağları final projesi.
