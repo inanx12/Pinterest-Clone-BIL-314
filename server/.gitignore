@@ -4,3 +4,11 @@ test_pcclone.db
 test_pcclone.db-shm
 test_pcclone.db-wal
 build/
+pcclone.db
+pcclone.db-shm
+pcclone.db-wal
+pcclone.db-shm
+pcclone.db-wal
+pcclone.db
+pcclone.db-shm
+pcclone.db-wal

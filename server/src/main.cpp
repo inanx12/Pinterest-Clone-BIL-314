@@ -1,78 +1,57 @@
-// Pinterest-Clone Server - v0.1 echo skeleton
-// BİL314 Bilgisayar Ağları Final Projesi
+#include "db.hpp"
+#include "server.hpp"
+#include "session_cache.hpp"
 
+#include <csignal>
 #include <iostream>
-#include <thread>
-#include <vector>
-#include <atomic>
-#include <cstring>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 
-constexpr int  PORT          = 8080;
-constexpr int  BACKLOG       = 32;
-constexpr int  RECV_BUF_SIZE = 4096;
+namespace {
 
-std::atomic<bool> g_running{true};
+// Global pointer: signal handler ancak global'e ulasabilir
+// (signal handler'a parametre gecirilemiyor).
+pc::Server* g_server = nullptr;
 
-static void handle_client(int client_fd, sockaddr_in client_addr) {
-    char ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
-    std::cout << "[+] Client connected: " << ip << ":"
-              << ntohs(client_addr.sin_port) << "\n";
-
-    char buf[RECV_BUF_SIZE];
-    while (g_running) {
-        int n = recv(client_fd, buf, sizeof(buf) - 1, 0);
-        if (n <= 0) break;
-        buf[n] = '\0';
-        std::cout << "[" << ip << "] -> " << buf;
-        send(client_fd, buf, n, 0);
-    }
-
-    std::cout << "[-] Client disconnected: " << ip << "\n";
-    close(client_fd);
+void handle_sigint(int) {
+    // Ctrl+C basildi -> server'i nazikce durdur.
+    if (g_server) g_server->stop();
 }
 
-int main() {
-    int srv_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (srv_fd < 0) {
-        std::cerr << "socket() failed\n";
+} // anon namespace
+
+int main(int argc, char* argv[]) {
+    // Port: argument verilmediyse 8080 (PROTOCOL.md default)
+    int port = 8080;
+    if (argc > 1) {
+        port = std::atoi(argv[1]);
+        if (port <= 0 || port > 65535) {
+            std::cerr << "Gecersiz port: " << argv[1] << "\n";
+            return 1;
+        }
+    }
+
+    // ----- Database -----
+    pc::Database db("pcclone.db");
+    if (!db.init()) {
+        std::cerr << "DB initialize edilemedi.\n";
         return 1;
     }
 
-    int opt = 1;
-    setsockopt(srv_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    // ----- Session cache (in-memory) -----
+    pc::SessionCache cache;
 
-    sockaddr_in addr{};
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port        = htons(PORT);
+    // ----- Server -----
+    pc::Server server(port, db, cache);
+    g_server = &server;
 
-    if (bind(srv_fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        std::cerr << "bind() failed\n";
-        return 1;
-    }
-    if (listen(srv_fd, BACKLOG) < 0) {
-        std::cerr << "listen() failed\n";
-        return 1;
-    }
+    // Ctrl+C yakalama
+    std::signal(SIGINT, handle_sigint);
+    std::signal(SIGTERM, handle_sigint);
 
-    std::cout << "Pinterest-Clone server v0.1 listening on :" << PORT << "\n";
-    std::cout << "Press Ctrl+C to stop\n";
+    // SIGPIPE ignore: client socket'i kapanmissa send() patlamasin
+    // (ayrica MSG_NOSIGNAL kullaniyoruz session.cpp'de, double safety)
+    std::signal(SIGPIPE, SIG_IGN);
 
-    std::vector<std::thread> threads;
-    while (g_running) {
-        sockaddr_in cli_addr{};
-        socklen_t cli_len = sizeof(cli_addr);
-        int cli_fd = accept(srv_fd, (sockaddr*)&cli_addr, &cli_len);
-        if (cli_fd < 0) continue;
-        threads.emplace_back(handle_client, cli_fd, cli_addr);
-        threads.back().detach();
-    }
-
-    close(srv_fd);
+    server.run();   // bloklu, Ctrl+C'ye kadar
+    g_server = nullptr;
     return 0;
 }
