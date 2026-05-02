@@ -4,8 +4,8 @@ BİL314 Bilgisayar Ağları final projesi. Deadline: 10 Mayıs 2026 (LMS).
 Hoca raw TCP istiyor (HTTP yasak), C/C++ ile, packet log isteyebilir.
 
 ## Ekip
-- İnan (server tarafı, sanırım) — github: inanx12
-- Arkadaş [İSİM] — henüz kurulum aşamasında
+- İnan (server tarafı) — github: inanx12
+- İsmail (Client tarafı)
 
 ## Stack
 - **Server:** C++17, POSIX socket, std::thread per-client, SQLite3, OpenSSL (SHA256)
@@ -27,9 +27,9 @@ Hoca raw TCP istiyor (HTTP yasak), C/C++ ile, packet log isteyebilir.
 - [x] netcat ile localhost:8080 üzerinde echo testi başarılı
 
 ## Sıradaki adımlar
-- [ ] Arkadaşın WSL kurulumu (kendisi yapıyor)
-- [ ] docs/schema.sql: users, sessions, media, likes, (comments) tabloları
-- [ ] İş bölümü kararı (kim server kim client)
+- [x] Arkadaşın WSL kurulumu (kendisi yapıyor)
+- [x] docs/schema.sql: users, sessions, media, likes, (comments) tabloları
+- [x] İş bölümü kararı (kim server kim client)
 - [ ] Server: REGISTER + LOGIN handler (SHA256 + token)
 - [ ] Client: Qt login ekranı + QTcpSocket bağlantısı
 - [ ] Gün 7-8: VPS deploy
