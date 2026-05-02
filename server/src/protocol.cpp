@@ -34,6 +34,10 @@ std::string ok() {
     return "OK\n";
 }
 
+std::string ready() {
+    return "READY\n";
+}
+
 // cliente işlemin başarılı olduğunu bildirirken, ek bir veri döndürür. 
 // Örnek kullanım: Giriş yapıldığında token göndermek için "OK <token_değeri>" üretmek.
 std::string ok(const std::string& payload) {

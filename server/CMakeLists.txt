@@ -20,6 +20,7 @@ set(PC_MODULE_SOURCES
     src/auth.cpp
     src/session.cpp
     src/server.cpp
+    src/media.cpp
 )
 
 # ----- server executable -----

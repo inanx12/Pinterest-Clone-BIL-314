@@ -2,6 +2,7 @@
 #include "auth.hpp"
 #include "protocol.hpp"
 #include "util.hpp"
+#include "media.hpp"
 
 #include <iostream>
 #include <string>
@@ -129,6 +130,43 @@ void handle_client(int client_fd, const std::string& client_ip,
             continue;
         }
 
+        // ----- UPLOAD -----
+	if (cmd.name == "UPLOAD") {
+    	    if (cmd.args.size() != 5) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+            auto user = validate_token(db, cache, cmd.args[0]);
+            if (!user) {
+                write_all(client_fd, proto::err(1001, "Invalid or expired token"));
+        	log_cmd(client_ip, current_user, cmd.name, "ERR 1001");
+        	continue;
+            }
+    	    long long size = 0;
+    	    try {
+                size = std::stoll(cmd.args[4]);
+            } catch (...) {
+        	write_all(client_fd, proto::err(1006, "Invalid size"));
+        	log_cmd(client_ip, user->username, cmd.name, "ERR 1006");
+        	continue;
+    	    }
+    	    auto r = handle_upload(client_fd, db, user->id,
+                                   cmd.args[1], cmd.args[2], cmd.args[3],
+                                   size, buf);
+    	    if (r.success) {
+                write_all(client_fd, proto::ok(r.media_id));
+        	log_cmd(client_ip, user->username, cmd.name, "OK");
+    	    } else {
+        	write_all(client_fd, proto::err(r.error_code, r.error_msg));
+        	log_cmd(client_ip, user->username, cmd.name,
+                	"ERR " + std::to_string(r.error_code) +
+                	(r.fatal ? " (close)" : ""));
+        	if (r.fatal) break;
+    	    }
+    	    continue;
+	}       
+
         // ----- Bozuk format / boş komut: bağlantıyı kapat (protokol §7) -----
         if (cmd.name.empty()) {
             write_all(client_fd, proto::err(2001, "Malformed command"));
@@ -141,7 +179,7 @@ void handle_client(int client_fd, const std::string& client_ip,
         // Şu anda implement edilmemiş bilinen komutlar için 2002 dönüp bağlantıyı
         // KAPATMIYORUZ — ileride ekleneceğinde aynı oturum çalışmaya devam etsin.
         static const char* known_but_not_yet[] = {
-            "UPLOAD", "LIST", "DOWNLOAD", "PREVIEW", "DELETE",
+            "LIST", "DOWNLOAD", "PREVIEW", "DELETE",
             "LIKE", "UNLIKE", "USER_MEDIA", "CHANGE_PASSWORD",
             "ADD_COMMENT", "LIST_COMMENTS", "DELETE_COMMENT"
         };

@@ -3,3 +3,13 @@ build/
 *.o
 *.exe
 .vscode/
+
+# DB dosyalari
+*.db
+
+# Upload edilen medya
+data/
+
+# Test/gecici dosyalar
+test_*.py
+test.jpg
