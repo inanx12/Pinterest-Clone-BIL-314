@@ -6,6 +6,32 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
+# Qt6 lokasyon fallback — kullanıcı CMAKE_PREFIX_PATH/Qt6_DIR vermediyse
+# (örn. VS Code CMake Tools eklentisi) yaygın Windows yollarını otomatik dene.
+if(WIN32)
+    # Mevcut Qt6_DIR boş veya geçersiz mi?
+    set(_qt_dir_ok FALSE)
+    if(Qt6_DIR AND EXISTS "${Qt6_DIR}/Qt6Config.cmake")
+        set(_qt_dir_ok TRUE)
+    endif()
+    if(NOT _qt_dir_ok)
+        foreach(_p IN ITEMS
+            "C:/Qt/6.11.0/mingw_64"
+            "C:/Qt/6.10.0/mingw_64"
+            "C:/Qt/6.9.0/mingw_64"
+            "C:/Qt/6.8.0/mingw_64"
+            "C:/Qt/6.7.0/mingw_64"
+        )
+            if(EXISTS "${_p}/lib/cmake/Qt6/Qt6Config.cmake")
+                set(Qt6_DIR "${_p}/lib/cmake/Qt6" CACHE PATH "Qt6 cmake dir" FORCE)
+                list(PREPEND CMAKE_PREFIX_PATH "${_p}")
+                message(STATUS "Qt6 fallback bulundu: ${Qt6_DIR}")
+                break()
+            endif()
+        endforeach()
+    endif()
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network Multimedia MultimediaWidgets)
 
 add_executable(client

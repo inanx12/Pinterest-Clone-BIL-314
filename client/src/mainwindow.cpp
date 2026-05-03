@@ -810,9 +810,11 @@ QString MainWindow::fileExtensionFor(const QString& mediaId) const {
 }
 
 void MainWindow::showError(const QString& title, int code, const QString& msg) {
-    statusBar()->showMessage(QString("%1: %2").arg(title, msg), 4000);
-    if (code != 1001) {
+    statusBar()->showMessage(QString("%1: %2 (kod %3)").arg(title, msg).arg(code), 5000);
+    // 1001 → main.cpp tokenInvalidated ile login'e atılır (popup gerekmez)
+    // 2002 → server "not implemented yet" — geliştirme süresi, popup spam'i olmasın
+    // 0    → bağlantı yok — status bar yeter
+    if (code != 1001 && code != 2002 && code != 0) {
         QMessageBox::warning(this, title, QString("Hata %1: %2").arg(code).arg(msg));
     }
-    // 1001 main.cpp'de tokenInvalidated ile zaten handle ediliyor
 }

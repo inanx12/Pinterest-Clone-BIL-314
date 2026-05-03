@@ -11,6 +11,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QTabWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 LoginWindow::LoginWindow(ApiClient* api, NetworkClient* net, QWidget* parent)
@@ -39,6 +40,12 @@ LoginWindow::LoginWindow(ApiClient* api, NetworkClient* net, QWidget* parent)
     connect(api_, &ApiClient::loginFailed,       this, &LoginWindow::onLoginFailed);
     connect(api_, &ApiClient::registerSucceeded, this, &LoginWindow::onRegisterSucceeded);
     connect(api_, &ApiClient::registerFailed,    this, &LoginWindow::onRegisterFailed);
+    connect(api_, &ApiClient::protocolError,     this, &LoginWindow::onProtocolError);
+
+    // Server cevap vermezse butonlar sonsuza kadar disabled kalmasın diye timeout.
+    responseTimer_ = new QTimer(this);
+    responseTimer_->setSingleShot(true);
+    connect(responseTimer_, &QTimer::timeout, this, &LoginWindow::onResponseTimeout);
 
     if (net_->isConnected()) onConnected();
 }
@@ -108,6 +115,10 @@ QWidget* LoginWindow::buildRegisterTab() {
 void LoginWindow::setBusy(bool b) {
     loginBtn_->setEnabled(!b);
     regBtn_->setEnabled(!b);
+    if (responseTimer_) {
+        if (b) responseTimer_->start(10000);  // 10 sn server cevap vermezse butonlar açılsın
+        else   responseTimer_->stop();
+    }
 }
 
 QString LoginWindow::validateUsername(const QString& u) const {
@@ -203,6 +214,23 @@ void LoginWindow::onNetworkError(const QString& msg) {
     connStatus_->setText("Ağ hatası: " + msg);
     connStatus_->setStyleSheet("color: #c0392b;");
     setBusy(true);
+}
+
+void LoginWindow::onProtocolError(const QString& msg) {
+    // Server bozuk format gönderdi (örn. "OK" sonrası boşluk yok, \n eksik vs.)
+    // Butonları geri aç ki kullanıcı tekrar denesin.
+    setBusy(false);
+    const QString text = "Server cevabı bozuk: " + msg;
+    loginStatus_->setText(text);
+    regStatus_->setText(text);
+}
+
+void LoginWindow::onResponseTimeout() {
+    // Server hiç cevap vermedi (10 sn). Butonları geri aç.
+    setBusy(false);
+    const QString text = "Sunucu cevap vermedi (10 sn). Tekrar dene.";
+    loginStatus_->setText(text);
+    regStatus_->setText(text);
 }
 
 void LoginWindow::closeEvent(QCloseEvent* e) {

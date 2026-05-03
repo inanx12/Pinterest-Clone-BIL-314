@@ -7,6 +7,7 @@ class QLineEdit;
 class QLabel;
 class QPushButton;
 class QTabWidget;
+class QTimer;
 
 class LoginWindow : public QWidget {
     Q_OBJECT
@@ -26,6 +27,8 @@ private slots:
     void onConnected();
     void onDisconnected();
     void onNetworkError(const QString& msg);
+    void onProtocolError(const QString& msg);
+    void onResponseTimeout();
 
 protected:
     void closeEvent(QCloseEvent* e) override;
@@ -50,5 +53,6 @@ private:
     QLabel     *regStatus_;
 
     QLabel     *connStatus_;
+    QTimer*     responseTimer_ = nullptr;  // server cevap vermezse butonları geri aç
     bool        authDone_ = false;
 };
