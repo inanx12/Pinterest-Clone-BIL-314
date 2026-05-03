@@ -165,7 +165,46 @@ void handle_client(int client_fd, const std::string& client_ip,
         	if (r.fatal) break;
     	    }
     	    continue;
-	}       
+	}
+
+	// ----- LIST -----
+        if (cmd.name == "LIST") {
+            if (cmd.args.size() != 4) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+            auto user = validate_token(db, cache, cmd.args[0]);
+            if (!user) {
+                write_all(client_fd, proto::err(1001, "Invalid or expired token"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1001");
+                continue;
+            }
+
+            int offset = 0, limit = 0;
+            try {
+                offset = std::stoi(cmd.args[2]);
+                limit  = std::stoi(cmd.args[3]);
+            } catch (...) {
+                write_all(client_fd, proto::err(1006, "Invalid offset or limit"));
+                log_cmd(client_ip, user->username, cmd.name, "ERR 1006");
+                continue;
+            }
+
+            auto r = handle_list(db, user->id, cmd.args[1], offset, limit);
+            if (r.success) {
+                // Cevap formatı: "OK <count>\n<json>\n"
+                std::string payload = std::to_string(r.count) + "\n" + r.json_payload;
+                write_all(client_fd, proto::ok(payload));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "OK (" + std::to_string(r.count) + ")");
+            } else {
+                write_all(client_fd, proto::err(r.error_code, r.error_msg));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "ERR " + std::to_string(r.error_code));
+            }
+            continue;
+        }
 
         // ----- Bozuk format / boş komut: bağlantıyı kapat (protokol §7) -----
         if (cmd.name.empty()) {
@@ -179,7 +218,7 @@ void handle_client(int client_fd, const std::string& client_ip,
         // Şu anda implement edilmemiş bilinen komutlar için 2002 dönüp bağlantıyı
         // KAPATMIYORUZ — ileride ekleneceğinde aynı oturum çalışmaya devam etsin.
         static const char* known_but_not_yet[] = {
-            "LIST", "DOWNLOAD", "PREVIEW", "DELETE",
+            "DOWNLOAD", "PREVIEW", "DELETE",
             "LIKE", "UNLIKE", "USER_MEDIA", "CHANGE_PASSWORD",
             "ADD_COMMENT", "LIST_COMMENTS", "DELETE_COMMENT"
         };

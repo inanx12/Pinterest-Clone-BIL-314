@@ -30,4 +30,25 @@ UploadResult handle_upload(int client_fd,
                            long long size,
                            std::string& recv_buf);
 
+
+
+struct ListResult {
+    bool success;
+    std::string json_payload;  // başarılıysa: "[{...},{...}]" formatında
+    int count;                 // kaç kayıt döndü
+    int error_code;
+    std::string error_msg;
+};
+
+// LIST komutunu işler.
+// requesting_user_id: o anki kullanıcının id'si (liked_by_me ve private filtreleme için)
+// sort: "newest" | "most_liked" | "most_downloaded"
+// offset, limit: sayfalama (limit max 20)
+ListResult handle_list(Database& db,
+                       int requesting_user_id,
+                       const std::string& sort,
+                       int offset,
+                       int limit);
+
+
 }

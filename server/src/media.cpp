@@ -1,6 +1,7 @@
 #include "media.hpp"
 #include "protocol.hpp"
 #include "util.hpp"
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -211,6 +212,87 @@ UploadResult handle_upload(int client_fd, Database& db, int owner_id,
     // ===== 7) Başarılı =====
     res.success  = true;
     res.media_id = media_id;
+    return res;
+}
+
+ListResult handle_list(Database& db,
+                       int requesting_user_id,
+                       const std::string& sort,
+                       int offset,
+                       int limit) {
+    ListResult res{};
+    res.success = false;
+
+    // ----- 1) Parametre validation -----
+    if (offset < 0 || limit <= 0) {
+        res.error_code = 1006;
+        res.error_msg = "Invalid offset or limit";
+        return res;
+    }
+    if (limit > 20) limit = 20;
+
+    // ----- 2) Sort tipini whitelist'e göre SQL ORDER BY'a çevir -----
+    std::string order_by;
+    if (sort == "newest") {
+        order_by = "m.created_at DESC";
+    } else if (sort == "most_liked") {
+        order_by = "m.like_count DESC, m.created_at DESC";
+    } else if (sort == "most_downloaded") {
+        order_by = "m.download_count DESC, m.created_at DESC";
+    } else {
+        res.error_code = 1006;
+        res.error_msg = "Invalid sort";
+        return res;
+    }
+
+    // ----- 3) SQL sorgusunu hazırla -----
+    std::string sql =
+        "SELECT m.id, m.type, m.visibility, u.username AS owner, "
+        "       m.filename, m.size, m.created_at, "
+        "       m.download_count, m.like_count, "
+        "       (l.user_id IS NOT NULL) AS liked_by_me "
+        "FROM media m "
+        "JOIN users u ON u.id = m.owner_id "
+        "LEFT JOIN likes l ON l.media_id = m.id AND l.user_id = ? "
+        "WHERE m.visibility = 'public' OR m.owner_id = ? "
+        "ORDER BY " + order_by + " "
+        "LIMIT ? OFFSET ?;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db.handle(), sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        res.error_code = 2002;
+        res.error_msg = "Database prepare failed";
+        return res;
+    }
+
+    sqlite3_bind_int(stmt, 1, requesting_user_id);
+    sqlite3_bind_int(stmt, 2, requesting_user_id);
+    sqlite3_bind_int(stmt, 3, limit);
+    sqlite3_bind_int(stmt, 4, offset);
+
+    // ----- 4) Sonuçları JSON array'e doldur -----
+    nlohmann::json arr = nlohmann::json::array();
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        nlohmann::json item;
+        item["id"]             = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        item["type"]           = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        item["visibility"]     = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        item["owner"]          = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        item["filename"]       = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        item["size"]           = sqlite3_column_int64(stmt, 5);
+        item["created_at"]     = sqlite3_column_int64(stmt, 6);
+        item["download_count"] = sqlite3_column_int64(stmt, 7);
+        item["like_count"]     = sqlite3_column_int64(stmt, 8);
+        item["liked_by_me"]    = (sqlite3_column_int(stmt, 9) != 0);
+        arr.push_back(item);
+    }
+    sqlite3_finalize(stmt);
+
+    // ----- 5) Sonucu paketle -----
+    res.success = true;
+    res.count = static_cast<int>(arr.size());
+    res.json_payload = arr.dump();
     return res;
 }
 
