@@ -1,3 +1,12 @@
+// stb header-only kütüphaneleri — implementation define'ları sadece BİR kez
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+
+#include "third_party/stb_image.h"
+#include "third_party/stb_image_resize2.h"
+#include "third_party/stb_image_write.h"
+
 #include "media.hpp"
 #include "protocol.hpp"
 #include "util.hpp"
@@ -92,6 +101,73 @@ bool insert_media_row(Database& db,
     bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
     return ok;
+}
+
+bool send_file_chunked(int fd, std::ifstream& in, long long size) {
+    char chunk[RECV_CHUNK];
+    long long remaining = size;
+    while (remaining > 0) {
+        size_t want = static_cast<size_t>(
+            std::min<long long>(RECV_CHUNK, remaining));
+        in.read(chunk, want);
+        std::streamsize got = in.gcount();
+        if (got <= 0) return false;          // disk read fail / EOF erken
+        // send_all benzeri: parça içinde partial send olabilir
+        size_t sent = 0;
+        while (sent < static_cast<size_t>(got)) {
+            ssize_t n = send(fd, chunk + sent, got - sent, MSG_NOSIGNAL);
+            if (n <= 0) return false;        // client koptu / TCP hatası
+            sent += static_cast<size_t>(n);
+        }
+        remaining -= got;
+    }
+    return true;
+}
+
+constexpr const char* THUMB_DIR = "data/thumbs";
+constexpr int THUMB_MAX = 256;     // protokol §4.7
+constexpr int JPEG_QUALITY = 85;   // 1-100, 85 = iyi denge
+
+// Resmi diskten yükle, max 256x256'ya aspect-preserving resize, JPEG olarak yaz.
+// Başarılıysa true. Çağıran taraf dst klasörünü kontrol etmeli.
+bool generate_thumbnail(const std::string& src_path,
+                        const std::string& dst_path) {
+    // 1) Resmi yükle (stb otomatik 3 kanala çevirir, alpha düşer)
+    int w = 0, h = 0, comp = 0;
+    unsigned char* data = stbi_load(src_path.c_str(), &w, &h, &comp, 3);
+    if (!data || w <= 0 || h <= 0) {
+        if (data) stbi_image_free(data);
+        return false;
+    }
+
+    // 2) Aspect-preserving target boyut (max kenar 256)
+    int tw, th;
+    if (w >= h) {
+        tw = THUMB_MAX;
+        th = std::max(1, (h * THUMB_MAX) / w);
+    } else {
+        th = THUMB_MAX;
+        tw = std::max(1, (w * THUMB_MAX) / h);
+    }
+
+    // 3) Resize buffer
+    std::vector<unsigned char> resized(static_cast<size_t>(tw) * th * 3);
+    unsigned char* ok_ptr = stbir_resize_uint8_linear(
+        data, w, h, 0,
+        resized.data(), tw, th, 0,
+        STBIR_RGB);
+    stbi_image_free(data);
+    if (!ok_ptr) return false;
+
+    // 4) Hedef klasörü garantile
+    std::error_code ec;
+    std::filesystem::create_directories(THUMB_DIR, ec);
+    if (ec) return false;
+
+    // 5) JPEG olarak kaydet
+    int wrote = stbi_write_jpg(dst_path.c_str(), tw, th, 3,
+                               resized.data(), JPEG_QUALITY);
+    return wrote != 0;
 }
 
 } // anonim namespace
@@ -293,6 +369,168 @@ ListResult handle_list(Database& db,
     res.success = true;
     res.count = static_cast<int>(arr.size());
     res.json_payload = arr.dump();
+    return res;
+}
+
+DownloadResult handle_download(int client_fd,
+                               Database& db,
+                               int requesting_user_id,
+                               const std::string& media_id) {
+    DownloadResult res{};
+    res.success = false;
+    res.fatal = false;
+
+    // ===== 1) DB'den medyayı çek =====
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db.handle(),
+            "SELECT owner_id, type, visibility, file_path, size "
+            "FROM media WHERE id = ?;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        res.error_code = 2002; res.error_msg = "Database prepare failed";
+        return res;
+    }
+    sqlite3_bind_text(stmt, 1, media_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        res.error_code = 1004; res.error_msg = "Not found";
+        return res;
+    }
+
+    int owner_id            = sqlite3_column_int(stmt, 0);
+    std::string type        = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+    std::string visibility  = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+    std::string file_path   = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+    long long   size        = sqlite3_column_int64(stmt, 4);
+    sqlite3_finalize(stmt);
+
+    // ===== 2) Private kontrolü =====
+    if (visibility == "private" && owner_id != requesting_user_id) {
+        res.error_code = 1009; res.error_msg = "Private media";
+        return res;
+    }
+
+    // ===== 3) Diskten dosyayı aç =====
+    std::ifstream in(file_path, std::ios::binary);
+    if (!in) {
+        // DB'de var ama disk yok → orphan kayıt (bizim fake test datası gibi)
+        res.error_code = 2002; res.error_msg = "File missing on server";
+        return res;
+    }
+
+    // ===== 4) Header gönder — bu noktadan sonra hatalar FATAL =====
+    std::string header = proto::ok(type + " " + std::to_string(size));
+    if (!write_all(client_fd, header)) {
+        res.error_code = 2002; res.error_msg = "Send header failed";
+        res.fatal = true;
+        return res;
+    }
+
+    // ===== 5) Chunked send =====
+    if (!send_file_chunked(client_fd, in, size)) {
+        res.error_code = 2002; res.error_msg = "Send payload failed";
+        res.fatal = true;
+        return res;
+    }
+
+    // ===== 6) download_count++ (atomik UPDATE, başarı sonrası) =====
+    sqlite3_stmt* upd = nullptr;
+    if (sqlite3_prepare_v2(db.handle(),
+            "UPDATE media SET download_count = download_count + 1 WHERE id = ?;",
+            -1, &upd, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(upd, 1, media_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_step(upd);  // hata olsa bile transfer başarılı, sayaç önemli değil
+        sqlite3_finalize(upd);
+    }
+
+    res.success = true;
+    return res;
+}
+
+PreviewResult handle_preview(int client_fd,
+                             Database& db,
+                             int requesting_user_id,
+                             const std::string& media_id) {
+    PreviewResult res{};
+    res.success = false;
+    res.fatal = false;
+
+    // ===== 1) DB'den medyayı çek =====
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db.handle(),
+            "SELECT owner_id, type, visibility, file_path "
+            "FROM media WHERE id = ?;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        res.error_code = 2002; res.error_msg = "Database prepare failed";
+        return res;
+    }
+    sqlite3_bind_text(stmt, 1, media_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        res.error_code = 1004; res.error_msg = "Not found";
+        return res;
+    }
+    int owner_id           = sqlite3_column_int(stmt, 0);
+    std::string type       = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+    std::string visibility = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+    std::string file_path  = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+    sqlite3_finalize(stmt);
+
+    // ===== 2) Video için preview yok (protokol §4.7) =====
+    if (type != "image") {
+        res.error_code = 1006; res.error_msg = "Preview not available";
+        return res;
+    }
+
+    // ===== 3) Private kontrolü =====
+    if (visibility == "private" && owner_id != requesting_user_id) {
+        res.error_code = 1009; res.error_msg = "Private media";
+        return res;
+    }
+
+    // ===== 4) Thumb path deterministic =====
+    std::string thumb_path = std::string(THUMB_DIR) + "/" + media_id + ".jpg";
+
+    // ===== 5) Cache miss → üret (lazy) =====
+    std::error_code ec;
+    if (!std::filesystem::exists(thumb_path, ec)) {
+        if (!generate_thumbnail(file_path, thumb_path)) {
+            res.error_code = 2002;
+            res.error_msg = "Thumbnail generation failed";
+            return res;
+        }
+    }
+
+    // ===== 6) Thumb'ı aç, boyutunu öğren =====
+    std::ifstream in(thumb_path, std::ios::binary | std::ios::ate);
+    if (!in) {
+        res.error_code = 2002; res.error_msg = "Thumbnail open failed";
+        return res;
+    }
+    long long thumb_size = static_cast<long long>(in.tellg());
+    in.seekg(0, std::ios::beg);
+    if (thumb_size <= 0) {
+        res.error_code = 2002; res.error_msg = "Thumbnail empty";
+        return res;
+    }
+
+    // ===== 7) Header gönder — sonrası FATAL =====
+    std::string header = proto::ok(std::to_string(thumb_size));
+    if (!write_all(client_fd, header)) {
+        res.error_code = 2002; res.error_msg = "Send header failed";
+        res.fatal = true;
+        return res;
+    }
+
+    // ===== 8) Chunked send =====
+    if (!send_file_chunked(client_fd, in, thumb_size)) {
+        res.error_code = 2002; res.error_msg = "Send payload failed";
+        res.fatal = true;
+        return res;
+    }
+
+    res.success = true;
     return res;
 }
 

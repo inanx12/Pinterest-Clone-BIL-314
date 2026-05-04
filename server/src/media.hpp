@@ -51,4 +51,42 @@ ListResult handle_list(Database& db,
                        int limit);
 
 
+
+struct DownloadResult {
+    bool success;
+    int error_code;
+    std::string error_msg;
+    bool fatal;             // true → session bağlantıyı kapatmalı
+                            //   (binary akışı yarım kaldı, senkronu kaybettik)
+};
+
+// DOWNLOAD komutunu işler.
+// Akış: validate → DB lookup → private check → diskten oku → header gönder
+//       → chunked send → download_count++.
+//
+// Header (OK <type> <size>\n) gönderilmeden önceki hatalar non-fatal.
+// Header gönderildikten sonraki hatalar fatal (client binary bekliyor).
+DownloadResult handle_download(int client_fd,
+                               Database& db,
+                               int requesting_user_id,
+                               const std::string& media_id);
+
+
+
+
+struct PreviewResult {
+    bool success;
+    int error_code;
+    std::string error_msg;
+    bool fatal;             // header gönderildikten sonra hata → bağlantı kapat
+};
+
+// PREVIEW komutu — resim için 256x256 (aspect-preserving) JPEG thumbnail döndürür.
+// Lazy: data/thumbs/<media_id>.jpg dosyası yoksa anında üretip diske cache'ler.
+// Video için ERR 1006 (preview yok). Private medya sadece sahibine.
+PreviewResult handle_preview(int client_fd,
+                             Database& db,
+                             int requesting_user_id,
+                             const std::string& media_id);
+
 }
