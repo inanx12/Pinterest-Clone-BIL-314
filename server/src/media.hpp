@@ -89,4 +89,66 @@ PreviewResult handle_preview(int client_fd,
                              int requesting_user_id,
                              const std::string& media_id);
 
+
+
+
+// =========================================================================
+// LIKE / UNLIKE
+// =========================================================================
+// Aynı struct hem LIKE hem UNLIKE için kullanılır.
+// Protokol §4.9: cevap "OK <new_like_count>\n"
+//
+// Idempotent: aynı kullanıcı tekrar LIKE atarsa count artmaz, yine OK döner.
+// Aynı şekilde UNLIKE: zaten beğenmemişse de OK + mevcut count döner.
+// Private medya beğenilemez → 1004 (varlığını leak etmemek için).
+struct LikeResult {
+    bool success;
+    long long new_like_count;  // başarılıysa: güncel like sayısı
+    int error_code;
+    std::string error_msg;
+};
+
+LikeResult handle_like(Database& db,
+                       int requesting_user_id,
+                       const std::string& media_id);
+
+LikeResult handle_unlike(Database& db,
+                         int requesting_user_id,
+                         const std::string& media_id);
+
+// =========================================================================
+// DELETE
+// =========================================================================
+// Sadece sahibi silebilir. Hard delete:
+//   - DB'den media row silinir → likes ve comments cascade ile gider
+//   - Disk: data/media/<id>.<ext> ve data/thumbs/<id>.jpg silinir
+// Sıra: DB önce, disk sonra (orphan dosya tolere edilir, orphan kayıt edilmez).
+struct DeleteResult {
+    bool success;
+    int error_code;
+    std::string error_msg;
+};
+
+DeleteResult handle_delete(Database& db,
+                           int requesting_user_id,
+                           const std::string& media_id);
+
+// =========================================================================
+// USER_MEDIA
+// =========================================================================
+// LIST'in profil versiyonu. Filtre farkı:
+//   - target_username'in medyaları
+//   - requesting_user == target ise public+private, değilse sadece public
+//   - target_username yoksa → ERR 1004
+//
+// Cevap formatı LIST ile birebir aynı, ListResult yeniden kullanılıyor.
+ListResult handle_user_media(Database& db,
+                             int requesting_user_id,
+                             const std::string& target_username,
+                             int offset,
+                             int limit);
+
+
+
+
 }

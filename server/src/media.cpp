@@ -534,4 +534,361 @@ PreviewResult handle_preview(int client_fd,
     return res;
 }
 
+// =========================================================================
+// LIKE / UNLIKE ortak helper: media'nın güncel durumunu çek.
+// Dönüş:
+//   - found = false → media yok, ya da private (varlığı leak etmemek için
+//                     iki durum da aynı şekilde "yok" gibi davranıyor)
+//   - found = true  → like_count doldurulur (count update öncesi değer)
+// =========================================================================
+namespace {
+
+struct MediaLikeInfo {
+    bool found;
+    long long like_count;
+};
+
+MediaLikeInfo fetch_media_for_like(Database& db,
+                                   const std::string& media_id) {
+    MediaLikeInfo info{false, 0};
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db.handle(),
+            "SELECT visibility, like_count FROM media WHERE id = ?;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        return info;
+    }
+    sqlite3_bind_text(stmt, 1, media_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        std::string visibility = reinterpret_cast<const char*>(
+            sqlite3_column_text(stmt, 0));
+        long long lc = sqlite3_column_int64(stmt, 1);
+
+        // Private medya = "yok" gibi davran (leak etmemek için)
+        if (visibility != "private") {
+            info.found = true;
+            info.like_count = lc;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return info;
+}
+
+} // anon
+
+// =========================================================================
+LikeResult handle_like(Database& db,
+                       int requesting_user_id,
+                       const std::string& media_id) {
+    LikeResult res{};
+    res.success = false;
+
+    // ----- 1) Media var mı + private değil mi -----
+    auto info = fetch_media_for_like(db, media_id);
+    if (!info.found) {
+        res.error_code = 1004;
+        res.error_msg = "Not found";
+        return res;
+    }
+
+    // ----- 2) INSERT OR IGNORE — duplicate sessizce skip -----
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db.handle(),
+            "INSERT OR IGNORE INTO likes (user_id, media_id, created_at) "
+            "VALUES (?, ?, ?);",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        res.error_code = 2002;
+        res.error_msg = "Database prepare failed";
+        return res;
+    }
+    sqlite3_bind_int  (stmt, 1, requesting_user_id);
+    sqlite3_bind_text (stmt, 2, media_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 3, util::now_unix());
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        res.error_code = 2002;
+        res.error_msg = "Database insert failed";
+        return res;
+    }
+
+    // ----- 3) Gerçekten yeni satır mı eklendi? -----
+    int changed = sqlite3_changes(db.handle());
+
+    long long new_count = info.like_count;
+
+    if (changed == 1) {
+        // Yeni like → like_count++ (atomik)
+        sqlite3_stmt* upd = nullptr;
+        if (sqlite3_prepare_v2(db.handle(),
+                "UPDATE media SET like_count = like_count + 1 WHERE id = ?;",
+                -1, &upd, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(upd, 1, media_id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(upd);
+            sqlite3_finalize(upd);
+            new_count = info.like_count + 1;
+        }
+        // UPDATE başarısız olsa bile likes satırı eklendi.
+        // Sayaç bozulur ama büyük problem değil; yine de dürüstçe söyleyelim:
+        // pratikte mutex altındayız, başarısız olma ihtimali sadece OOM.
+    }
+    // changed == 0 → idempotent: zaten beğenmiş, count aynı kalır.
+
+    res.success = true;
+    res.new_like_count = new_count;
+    return res;
+}
+
+// =========================================================================
+LikeResult handle_unlike(Database& db,
+                         int requesting_user_id,
+                         const std::string& media_id) {
+    LikeResult res{};
+    res.success = false;
+
+    // ----- 1) Media var mı + private değil mi -----
+    auto info = fetch_media_for_like(db, media_id);
+    if (!info.found) {
+        res.error_code = 1004;
+        res.error_msg = "Not found";
+        return res;
+    }
+
+    // ----- 2) DELETE — yoksa sessizce skip -----
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db.handle(),
+            "DELETE FROM likes WHERE user_id = ? AND media_id = ?;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        res.error_code = 2002;
+        res.error_msg = "Database prepare failed";
+        return res;
+    }
+    sqlite3_bind_int (stmt, 1, requesting_user_id);
+    sqlite3_bind_text(stmt, 2, media_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        res.error_code = 2002;
+        res.error_msg = "Database delete failed";
+        return res;
+    }
+
+    int changed = sqlite3_changes(db.handle());
+
+    long long new_count = info.like_count;
+
+    if (changed == 1) {
+        // Gerçekten unlike oldu → like_count-- (atomik, alt sınır 0)
+        sqlite3_stmt* upd = nullptr;
+        if (sqlite3_prepare_v2(db.handle(),
+                "UPDATE media SET like_count = MAX(like_count - 1, 0) "
+                "WHERE id = ?;",
+                -1, &upd, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(upd, 1, media_id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(upd);
+            sqlite3_finalize(upd);
+            new_count = std::max<long long>(info.like_count - 1, 0);
+        }
+    }
+    // changed == 0 → zaten beğenmemişti, idempotent OK.
+
+    res.success = true;
+    res.new_like_count = new_count;
+    return res;
+}
+
+// =========================================================================
+// DELETE
+// =========================================================================
+// Akış:
+//   1) Media'yı çek (owner + path bilgisi)
+//   2) Yetki kontrolü: sadece sahibi silebilir
+//   3) DB'den DELETE → likes ve comments cascade ile gider
+//   4) Disk dosyalarını sil (file_path + thumb deterministic path)
+//      - thumb DB'de NULL olsa bile data/thumbs/<id>.jpg deneriz
+//      - Disk silme fail = orphan dosya, tolere edilir (DB tutarlı)
+DeleteResult handle_delete(Database& db,
+                           int requesting_user_id,
+                           const std::string& media_id) {
+    DeleteResult res{};
+    res.success = false;
+
+    // ----- 1) Media'yı çek -----
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db.handle(),
+            "SELECT owner_id, file_path FROM media WHERE id = ?;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        res.error_code = 2002;
+        res.error_msg = "Database prepare failed";
+        return res;
+    }
+    sqlite3_bind_text(stmt, 1, media_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        res.error_code = 1004;
+        res.error_msg = "Not found";
+        return res;
+    }
+
+    int owner_id = sqlite3_column_int(stmt, 0);
+    std::string file_path = reinterpret_cast<const char*>(
+        sqlite3_column_text(stmt, 1));
+    sqlite3_finalize(stmt);
+
+    // ----- 2) Yetki kontrolü -----
+    if (owner_id != requesting_user_id) {
+        res.error_code = 1005;
+        res.error_msg = "Not your media";
+        return res;
+    }
+
+    // ----- 3) DB'den sil (likes/comments cascade) -----
+    sqlite3_stmt* del = nullptr;
+    if (sqlite3_prepare_v2(db.handle(),
+            "DELETE FROM media WHERE id = ?;",
+            -1, &del, nullptr) != SQLITE_OK) {
+        res.error_code = 2002;
+        res.error_msg = "Database prepare failed";
+        return res;
+    }
+    sqlite3_bind_text(del, 1, media_id.c_str(), -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(del);
+    sqlite3_finalize(del);
+
+    if (rc != SQLITE_DONE) {
+        res.error_code = 2002;
+        res.error_msg = "Database delete failed";
+        return res;
+    }
+
+    // ----- 4) Disk dosyalarını sil -----
+    // DB başarılı oldu → bu noktadan sonra hata olsa bile success dönüyoruz.
+    // Orphan dosya kalsa bile veri tutarlılığı bozulmaz.
+    std::error_code ec;
+
+    // Ana medya dosyası
+    std::filesystem::remove(file_path, ec);
+    // ec set olsa bile umursamıyoruz — log'a basabiliriz ama şart değil
+
+    // Thumbnail (deterministic path — DB'deki thumb_path NULL olabilir,
+    // çünkü PREVIEW lazy generate ediyor ve DB'yi güncellemiyor)
+    std::string thumb_path = std::string(THUMB_DIR) + "/" + media_id + ".jpg";
+    std::filesystem::remove(thumb_path, ec);
+    // Thumb yoksa zaten OK, ec set olur ama tolere ediyoruz
+
+    res.success = true;
+    return res;
+}
+
+// =========================================================================
+// USER_MEDIA — bir kullanıcının medyalarını listele (profil sayfası)
+// =========================================================================
+// LIST'ten farkları:
+//   - Belirli bir owner'ın medyaları (username → user_id lookup)
+//   - Kullanıcı yoksa → ERR 1004
+//   - Sahibi kendisi ise: public + private hepsi
+//   - Başkası ise: sadece public
+//   - Sıralama: her zaman newest (protokol §4.10 sort param yok)
+//
+// Format LIST ile birebir aynı, ListResult reuse ediliyor.
+ListResult handle_user_media(Database& db,
+                             int requesting_user_id,
+                             const std::string& target_username,
+                             int offset,
+                             int limit) {
+    ListResult res{};
+    res.success = false;
+
+    // ----- 1) Parametre validation -----
+    if (offset < 0 || limit <= 0) {
+        res.error_code = 1006;
+        res.error_msg = "Invalid offset or limit";
+        return res;
+    }
+    if (limit > 20) limit = 20;
+
+    // ----- 2) Target kullanıcının id'sini bul -----
+    int target_user_id = -1;
+    {
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db.handle(),
+                "SELECT id FROM users WHERE username = ? COLLATE NOCASE;",
+                -1, &stmt, nullptr) != SQLITE_OK) {
+            res.error_code = 2002;
+            res.error_msg = "Database prepare failed";
+            return res;
+        }
+        sqlite3_bind_text(stmt, 1, target_username.c_str(), -1, SQLITE_TRANSIENT);
+
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            target_user_id = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+
+        if (target_user_id == -1) {
+            res.error_code = 1004;
+            res.error_msg = "User not found";
+            return res;
+        }
+    }
+
+    // ----- 3) Visibility filtresi -----
+    // Sahibi kendisi ise private'lar da gözüksün, değilse sadece public.
+    bool is_self = (requesting_user_id == target_user_id);
+
+    // ----- 4) SQL hazırla (LIST handler'ının kuzeni) -----
+    std::string sql =
+        "SELECT m.id, m.type, m.visibility, u.username AS owner, "
+        "       m.filename, m.size, m.created_at, "
+        "       m.download_count, m.like_count, "
+        "       (l.user_id IS NOT NULL) AS liked_by_me "
+        "FROM media m "
+        "JOIN users u ON u.id = m.owner_id "
+        "LEFT JOIN likes l ON l.media_id = m.id AND l.user_id = ? "
+        "WHERE m.owner_id = ?";
+    if (!is_self) {
+        sql += " AND m.visibility = 'public'";
+    }
+    sql += " ORDER BY m.created_at DESC LIMIT ? OFFSET ?;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db.handle(), sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) {
+        res.error_code = 2002;
+        res.error_msg = "Database prepare failed";
+        return res;
+    }
+
+    sqlite3_bind_int(stmt, 1, requesting_user_id);
+    sqlite3_bind_int(stmt, 2, target_user_id);
+    sqlite3_bind_int(stmt, 3, limit);
+    sqlite3_bind_int(stmt, 4, offset);
+
+    // ----- 5) JSON array doldur (LIST ile birebir aynı) -----
+    nlohmann::json arr = nlohmann::json::array();
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        nlohmann::json item;
+        item["id"]             = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        item["type"]           = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        item["visibility"]     = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        item["owner"]          = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        item["filename"]       = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        item["size"]           = sqlite3_column_int64(stmt, 5);
+        item["created_at"]     = sqlite3_column_int64(stmt, 6);
+        item["download_count"] = sqlite3_column_int64(stmt, 7);
+        item["like_count"]     = sqlite3_column_int64(stmt, 8);
+        item["liked_by_me"]    = (sqlite3_column_int(stmt, 9) != 0);
+        arr.push_back(item);
+    }
+    sqlite3_finalize(stmt);
+
+    res.success = true;
+    res.count = static_cast<int>(arr.size());
+    res.json_payload = arr.dump();
+    return res;
+}
+
 } // namespace pc
