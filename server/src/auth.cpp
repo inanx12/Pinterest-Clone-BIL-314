@@ -202,4 +202,120 @@ bool logout(Database& db, SessionCache& cache, const std::string& token) {
     return rc == SQLITE_DONE;
 }
 
+// =========================================================================
+// CHANGE_PASSWORD
+// =========================================================================
+// Sıra (önemli):
+//   1. Token validate → user_id
+//   2. Old password kontrol (mevcut salt + hash)
+//   3. New password validate (>=6)
+//   4. Yeni salt + yeni hash UPDATE users
+//   5. DELETE FROM sessions WHERE user_id=?  (multi-device dahil hepsi)
+//   6. cache.remove_all_for_user(user_id)
+//   7. Yeni session create → new_token
+//
+// Eski salt'ı kullanan tüm tokenlar uçar. Bu cihaz dahil.
+// Cevap olarak yeni token döndürüyoruz (protokol §4.11).
+ChangePasswordResult change_password(Database& db, SessionCache& cache,
+                                     const std::string& token,
+                                     const std::string& old_password,
+                                     const std::string& new_password) {
+    ChangePasswordResult r{false, "", "", 0};
+
+    // ----- 1) Token validate, user bilgisini al -----
+    auto user_opt = validate_token(db, cache, token);
+    if (!user_opt) {
+        r.error = "Invalid or expired token";
+        r.error_code = 1001;
+        return r;
+    }
+    int user_id = user_opt->id;
+    std::string username = user_opt->username;
+
+    // ----- 2) Mevcut salt + hash'i çek, old_password kontrol -----
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db.handle(),
+            "SELECT password_hash, salt FROM users WHERE id = ?;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        r.error = "Internal error";
+        r.error_code = 2002;
+        return r;
+    }
+    sqlite3_bind_int(stmt, 1, user_id);
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        // Token validate olmuştu ama user yok → kayıt silinmiş, çok nadir
+        r.error = "Internal error";
+        r.error_code = 2002;
+        return r;
+    }
+    std::string stored_hash = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+    std::string old_salt    = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+    sqlite3_finalize(stmt);
+
+    if (util::sha256_hex(old_password + old_salt) != stored_hash) {
+        r.error = "Wrong password";
+        r.error_code = 1003;
+        return r;
+    }
+
+    // ----- 3) Yeni şifreyi validate et -----
+    if (new_password.size() < 6) {
+        r.error = "New password too short";
+        r.error_code = 1006;
+        return r;
+    }
+
+    // ----- 4) Yeni salt + hash, UPDATE users -----
+    std::string new_salt = util::random_hex(16);
+    if (new_salt.empty()) {
+        r.error = "Internal error";
+        r.error_code = 2002;
+        return r;
+    }
+    std::string new_hash = util::sha256_hex(new_password + new_salt);
+
+    if (sqlite3_prepare_v2(db.handle(),
+            "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?;",
+            -1, &stmt, nullptr) != SQLITE_OK) {
+        r.error = "Internal error";
+        r.error_code = 2002;
+        return r;
+    }
+    sqlite3_bind_text(stmt, 1, new_hash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, new_salt.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int (stmt, 3, user_id);
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (rc != SQLITE_DONE) {
+        r.error = "Internal error";
+        r.error_code = 2002;
+        return r;
+    }
+
+    // ----- 5) Tüm eski sessions'ı DB'den sil -----
+    if (sqlite3_prepare_v2(db.handle(),
+            "DELETE FROM sessions WHERE user_id = ?;",
+            -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, user_id);
+        sqlite3_step(stmt);  // hata olsa bile devam — cache temizliği yine yapılacak
+        sqlite3_finalize(stmt);
+    }
+
+    // ----- 6) Cache'ten de bu kullanıcının tüm tokenlarını sil -----
+    cache.remove_all_for_user(user_id);
+
+    // ----- 7) Yeni session oluştur -----
+    std::string new_token = create_session(db, cache, user_id, username);
+    if (new_token.empty()) {
+        r.error = "Internal error";
+        r.error_code = 2002;
+        return r;
+    }
+
+    r.success = true;
+    r.new_token = new_token;
+    return r;
+}
+
 }

@@ -165,7 +165,239 @@ void handle_client(int client_fd, const std::string& client_ip,
         	if (r.fatal) break;
     	    }
     	    continue;
-	}       
+	}
+
+	// ----- LIST -----
+        if (cmd.name == "LIST") {
+            if (cmd.args.size() != 4) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+            auto user = validate_token(db, cache, cmd.args[0]);
+            if (!user) {
+                write_all(client_fd, proto::err(1001, "Invalid or expired token"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1001");
+                continue;
+            }
+
+            int offset = 0, limit = 0;
+            try {
+                offset = std::stoi(cmd.args[2]);
+                limit  = std::stoi(cmd.args[3]);
+            } catch (...) {
+                write_all(client_fd, proto::err(1006, "Invalid offset or limit"));
+                log_cmd(client_ip, user->username, cmd.name, "ERR 1006");
+                continue;
+            }
+
+            auto r = handle_list(db, user->id, cmd.args[1], offset, limit);
+            if (r.success) {
+                // Cevap formatı: "OK <count>\n<json>\n"
+                std::string payload = std::to_string(r.count) + "\n" + r.json_payload;
+                write_all(client_fd, proto::ok(payload));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "OK (" + std::to_string(r.count) + ")");
+            } else {
+                write_all(client_fd, proto::err(r.error_code, r.error_msg));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "ERR " + std::to_string(r.error_code));
+            }
+            continue;
+        }
+        
+        // ----- DOWNLOAD -----
+	if (cmd.name == "DOWNLOAD") {
+	    if (cmd.args.size() != 2) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+	    auto user = validate_token(db, cache, cmd.args[0]);
+    	    if (!user) {
+                write_all(client_fd, proto::err(1001, "Invalid or expired token"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1001");
+                continue;
+            }
+	    auto r = handle_download(client_fd, db, user->id, cmd.args[1]);
+    	    if (r.success) {
+                log_cmd(client_ip, user->username, cmd.name, "OK");
+            } else {
+                // Header gönderilmeden hata olduysa client'a ERR yollayabiliriz.
+                // Fatal ise zaten yarım binary gitti → ERR yollasak parser'ı bozar, sadece kapat.
+                if (!r.fatal) {
+                    write_all(client_fd, proto::err(r.error_code, r.error_msg));
+                }
+                log_cmd(client_ip, user->username, cmd.name,
+                        "ERR " + std::to_string(r.error_code) +
+                        (r.fatal ? " (close)" : ""));
+                if (r.fatal) break;
+            }
+            continue;
+	}
+
+        // ----- PREVIEW -----
+	if (cmd.name == "PREVIEW") {
+    	    if (cmd.args.size() != 2) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+	    auto user = validate_token(db, cache, cmd.args[0]);
+    	    if (!user) {
+                write_all(client_fd, proto::err(1001, "Invalid or expired token"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1001");
+                continue;
+            }
+	    auto r = handle_preview(client_fd, db, user->id, cmd.args[1]);
+    	    if (r.success) {
+                log_cmd(client_ip, user->username, cmd.name, "OK");
+	    } else {
+        	if (!r.fatal) {
+            	    write_all(client_fd, proto::err(r.error_code, r.error_msg));
+                }
+                log_cmd(client_ip, user->username, cmd.name,
+                        "ERR " + std::to_string(r.error_code) +
+                        (r.fatal ? " (close)" : ""));
+                if (r.fatal) break;
+            }
+            continue;
+        }
+
+        // ----- LIKE -----
+        if (cmd.name == "LIKE") {
+            if (cmd.args.size() != 2) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+            auto user = validate_token(db, cache, cmd.args[0]);
+            if (!user) {
+                write_all(client_fd, proto::err(1001, "Invalid or expired token"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1001");
+                continue;
+            }
+            auto r = handle_like(db, user->id, cmd.args[1]);
+            if (r.success) {
+                write_all(client_fd, proto::ok(std::to_string(r.new_like_count)));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "OK (" + std::to_string(r.new_like_count) + ")");
+            } else {
+                write_all(client_fd, proto::err(r.error_code, r.error_msg));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "ERR " + std::to_string(r.error_code));
+            }
+            continue;
+        }
+
+        // ----- UNLIKE -----
+        if (cmd.name == "UNLIKE") {
+            if (cmd.args.size() != 2) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+            auto user = validate_token(db, cache, cmd.args[0]);
+            if (!user) {
+                write_all(client_fd, proto::err(1001, "Invalid or expired token"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1001");
+                continue;
+            }
+            auto r = handle_unlike(db, user->id, cmd.args[1]);
+            if (r.success) {
+                write_all(client_fd, proto::ok(std::to_string(r.new_like_count)));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "OK (" + std::to_string(r.new_like_count) + ")");
+            } else {
+                write_all(client_fd, proto::err(r.error_code, r.error_msg));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "ERR " + std::to_string(r.error_code));
+            }
+            continue;
+        }
+
+	// ----- DELETE -----
+        if (cmd.name == "DELETE") {
+            if (cmd.args.size() != 2) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+            auto user = validate_token(db, cache, cmd.args[0]);
+            if (!user) {
+                write_all(client_fd, proto::err(1001, "Invalid or expired token"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1001");
+                continue;
+            }
+            auto r = handle_delete(db, user->id, cmd.args[1]);
+            if (r.success) {
+                write_all(client_fd, proto::ok());
+                log_cmd(client_ip, user->username, cmd.name, "OK");
+            } else {
+                write_all(client_fd, proto::err(r.error_code, r.error_msg));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "ERR " + std::to_string(r.error_code));
+            }
+            continue;
+        }
+
+	// ----- USER_MEDIA -----
+        if (cmd.name == "USER_MEDIA") {
+            if (cmd.args.size() != 4) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+            auto user = validate_token(db, cache, cmd.args[0]);
+            if (!user) {
+                write_all(client_fd, proto::err(1001, "Invalid or expired token"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1001");
+                continue;
+            }
+
+            int offset = 0, limit = 0;
+            try {
+                offset = std::stoi(cmd.args[2]);
+                limit  = std::stoi(cmd.args[3]);
+            } catch (...) {
+                write_all(client_fd, proto::err(1006, "Invalid offset or limit"));
+                log_cmd(client_ip, user->username, cmd.name, "ERR 1006");
+                continue;
+            }
+
+            auto r = handle_user_media(db, user->id, cmd.args[1], offset, limit);
+            if (r.success) {
+                std::string payload = std::to_string(r.count) + "\n" + r.json_payload;
+                write_all(client_fd, proto::ok(payload));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "OK (" + std::to_string(r.count) + ")");
+            } else {
+                write_all(client_fd, proto::err(r.error_code, r.error_msg));
+                log_cmd(client_ip, user->username, cmd.name,
+                        "ERR " + std::to_string(r.error_code));
+            }
+            continue;
+        }
+
+	// ----- CHANGE_PASSWORD -----
+        if (cmd.name == "CHANGE_PASSWORD") {
+            if (cmd.args.size() != 3) {
+                write_all(client_fd, proto::err(1006, "Invalid arguments"));
+                log_cmd(client_ip, current_user, cmd.name, "ERR 1006");
+                continue;
+            }
+            auto r = change_password(db, cache, cmd.args[0], cmd.args[1], cmd.args[2]);
+            if (r.success) {
+                write_all(client_fd, proto::ok(r.new_token));
+                log_cmd(client_ip, current_user, cmd.name, "OK");
+                // current_user log için zaten doluydu, dokunmuyoruz
+            } else {
+                write_all(client_fd, proto::err(r.error_code, r.error));
+                log_cmd(client_ip, current_user, cmd.name,
+                        "ERR " + std::to_string(r.error_code));
+            }
+            continue;
+        }
 
         // ----- Bozuk format / boş komut: bağlantıyı kapat (protokol §7) -----
         if (cmd.name.empty()) {
@@ -179,8 +411,6 @@ void handle_client(int client_fd, const std::string& client_ip,
         // Şu anda implement edilmemiş bilinen komutlar için 2002 dönüp bağlantıyı
         // KAPATMIYORUZ — ileride ekleneceğinde aynı oturum çalışmaya devam etsin.
         static const char* known_but_not_yet[] = {
-            "LIST", "DOWNLOAD", "PREVIEW", "DELETE",
-            "LIKE", "UNLIKE", "USER_MEDIA", "CHANGE_PASSWORD",
             "ADD_COMMENT", "LIST_COMMENTS", "DELETE_COMMENT"
         };
         bool is_known = false;
