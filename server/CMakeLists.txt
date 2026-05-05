@@ -10,6 +10,7 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(Threads REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(nlohmann_json 3.2.0 REQUIRED)
 
 # ----- Tum modul cpp'leri (main.cpp haric, hem server hem testte kullanilir) -----
 set(PC_MODULE_SOURCES
@@ -33,6 +34,7 @@ target_link_libraries(server PRIVATE
     Threads::Threads
     SQLite::SQLite3
     OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
 )
 
 # ----- test_main executable -----
@@ -47,5 +49,6 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_main.cpp)
         Threads::Threads
         SQLite::SQLite3
         OpenSSL::Crypto
+	nlohmann_json::nlohmann_json
     )
 endif()
