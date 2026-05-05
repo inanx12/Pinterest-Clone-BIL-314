@@ -86,6 +86,6 @@ int main(int argc, char* argv[]) {
         showLogin();
     }
 
-    net.connectToServer("192.168.240.250", pc::constants::SERVER_PORT);
+    net.connectToServer("178.105.95.17", pc::constants::SERVER_PORT);
     return app.exec();
 }
